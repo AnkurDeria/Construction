@@ -3,6 +3,7 @@ using UnityEngine;
 using System.Data.SqlClient;
 using System.IO;
 using TMPro;
+using UnityEngine.UI;
 
 public class VehicleManager : MonoBehaviour
 {
@@ -10,6 +11,8 @@ public class VehicleManager : MonoBehaviour
     [SerializeField] private GameObject paver;
     [SerializeField] private GameObject roller;
     [SerializeField] private Transform milestoneParent;
+    [SerializeField] private Slider progressSlider;
+    [SerializeField] private TMP_Text progressText;
 
     private SqlConnection connection;
     private SqlCommand fetchQuery;
@@ -17,16 +20,17 @@ public class VehicleManager : MonoBehaviour
     private string sql;
     private float prevLat;
     private float prevLong;
-    private bool firstFetch = true;
-    private bool paverMoving = false;
-    private bool rollerMoving = false;
-    private float progress = 0f;
-    private System.DateTime currentTime;
-    private System.DateTime initialTime;
-    private System.TimeSpan duration;
+    [SerializeField] private bool firstFetch = true;
+    [SerializeField] private bool paverMoving = false;
+    [SerializeField] private bool rollerMoving = false;
+    [SerializeField] private float progress = 0f;
+    [SerializeField] private System.DateTime currentTime;
+    [SerializeField] private System.DateTime initialTime;
+    [SerializeField] private System.TimeSpan duration;
     private float idleTime = 0f;
     private System.Globalization.CultureInfo timeFormat = new System.Globalization.CultureInfo("en-US");
     private SqlDataReader reader;
+    private bool simulation = false;
     void Awake()
     {
         CreateMilestones();
@@ -48,33 +52,62 @@ public class VehicleManager : MonoBehaviour
         {
             Debug.Log(e.ToString());
         }
+        try
+        {
+            float xLoc = float.Parse(File.ReadAllText(Application.dataPath + "\\PaverLoc.txt"));
+            paver.transform.position = new Vector3(xLoc, paver.transform.position.y, paver.transform.position.z);
+        }
+        catch
+        {
+            paver.transform.position = new Vector3(0, paver.transform.position.y, paver.transform.position.z);
+        }
+        roadMat.SetFloat("Vector1_D07200D5", paver.transform.position.x + 7);
+        roller.transform.position = new Vector3(paver.transform.position.x, roller.transform.position.y, roller.transform.position.z);
     }
 
     public void StopSimulation()
     {
-        Debug.Log("Stopping Simulation ...");
-        StopAllCoroutines();
-        string query = "INSERT INTO [dbo].[dynamicmodelhistory] VALUES('";
-        for(int i = 0; i < 10; i++)
+        if (simulation)
         {
-            query += reader[i].ToString() + "','";
+            Debug.Log("Stopping Simulation ...");
+            StopAllCoroutines();
+            string query = "INSERT INTO [dbo].[dynamicmodelhistory] VALUES('";
+            for (int i = 0; i < 10; i++)
+            {
+                if (i == 5)
+                {
+                    query += "Paving','";
+                }
+                else
+                {
+                    query += reader[i].ToString() + "','";
+                }
+            }
+            query += reader[10].ToString() + "')";
+            updateQuery = new SqlCommand(query, connection);
+            updateQuery.ExecuteReaderAsync();
+            reader.Close();
+            connection.Close();
+            StreamWriter stream = new StreamWriter(Application.dataPath + "\\PaverLoc.txt", false);
+            stream.WriteLine((paver.transform.position.x).ToString());
+            stream.Close();
+            paverMoving = false;
+            rollerMoving = false;
+            simulation = false;
         }
-        query += reader[10].ToString() + "')";
-        updateQuery = new SqlCommand(query, connection);
-        updateQuery.ExecuteReaderAsync();
-        reader.Close();
-        connection.Close();
-        paverMoving = false;
-        rollerMoving = false;
     }
 
     public void StartSimulation()
     {
-        Debug.Log("Starting Simulation ...");
-        connection.Open();
-        sql = "SELECT * FROM [dbo].[dynamicmodel]";
-        fetchQuery = new SqlCommand(sql, connection);
-        StartCoroutine(FetchData());
+        if (!simulation)
+        {
+            Debug.Log("Starting Simulation ...");
+            connection.Open();
+            sql = "SELECT * FROM [dbo].[dynamicmodel]";
+            fetchQuery = new SqlCommand(sql, connection);
+            simulation = true;
+            StartCoroutine(FetchData());
+        }
     }
     private void CreateMilestones()
     {
@@ -98,10 +131,11 @@ public class VehicleManager : MonoBehaviour
         Vector3 m_initpos = paver.transform.position;
         float m_time = 0f;
         Vector3 m_target = new Vector3(m_initpos.x + x, m_initpos.y, m_initpos.z);
-        while (paver.transform.position.x < (m_initpos.x + x))
+        while (m_time < 1f)
         {
             m_time += Time.deltaTime / 15f;
             paver.transform.position = Vector3.Lerp(m_initpos, m_target, m_time);
+            roadMat.SetFloat("Vector1_D07200D5", paver.transform.position.x + 7);
             yield return null;
         }
         paverMoving = false;
@@ -111,7 +145,7 @@ public class VehicleManager : MonoBehaviour
     {
         
         float m_time = 0f;
-        while (roller.transform.position.x < end.x)
+        while (m_time < 1f)
         {
             m_time += Time.deltaTime / 5f;
             roller.transform.position = Vector3.Lerp(start, end, m_time);
@@ -149,13 +183,13 @@ public class VehicleManager : MonoBehaviour
         float long2 = Mathf.Deg2Rad * prevLong;
         float longDiff = long1 - long2;
         float angle = Mathf.Pow(Mathf.Sin(latDiff / 2f), 2f) + Mathf.Cos(lat2) * Mathf.Cos(lat1) * Mathf.Pow(Mathf.Sin(longDiff / 2f), 2f);
-        float distance = 6373f * (2f * Mathf.Atan2(Mathf.Sqrt(angle), Mathf.Sqrt(1f - angle)));
+        float distance = 6373f * (2f * Mathf.Atan2(Mathf.Sqrt(angle), Mathf.Sqrt(1f - angle))) * 1000f;
+        Debug.Log("Distance = " + distance);
         if (Mathf.Approximately(distance, 0f))
         {
             return;
         }
         StartCoroutine(MovePaver(distance));
-        
         prevLat = float.Parse(reader[0].ToString());
         prevLong = float.Parse(reader[1].ToString());
         progress += distance;
@@ -169,6 +203,7 @@ public class VehicleManager : MonoBehaviour
             { 
                 reader.Close();
             }
+            Debug.Log("Fetching Data...");
             reader = fetchQuery.ExecuteReader();
             
                 if (reader.Read())
@@ -179,12 +214,14 @@ public class VehicleManager : MonoBehaviour
                         prevLong = float.Parse(reader[1].ToString());
                         firstFetch = false;
                         initialTime = System.Convert.ToDateTime(reader[7].ToString(), timeFormat);
+                        Debug.Log("Initial Time = " + initialTime);
                         progress = float.Parse(reader[8].ToString());
                     }
                     currentTime = System.Convert.ToDateTime(reader[7].ToString(), timeFormat);
+                    Debug.Log("Current Time = " + currentTime);
                     if (reader[5].ToString() == "Asphalt Paver")
                     {
-                        
+                        Debug.Log("Paver should move.");
                         if (!paverMoving)
                         {
                             Debug.Log("Paver Moving...");
@@ -202,14 +239,16 @@ public class VehicleManager : MonoBehaviour
                         }
                     }
                 }
-            
-            updateQuery = new SqlCommand("UPDATE [dbo].[dynamicmodel] SET Progress='" + progress.ToString() + "',Idle_Time='"+ (idleTime / 60f).ToString() + "',Duration='" + (duration.TotalMinutes).ToString()+"'", connection);
-            updateQuery.ExecuteReaderAsync();
+            duration = currentTime - initialTime;
+            Debug.Log("Idle time in minutes = "+(idleTime / 60f));
+            Debug.Log("Duration in minutes = "+duration.TotalMinutes);
+            updateQuery = new SqlCommand("UPDATE [dbo].[dynamicmodel] SET Progress='" + progress.ToString() + "',Idle_Time='"+ (idleTime / 60f)+ "',Duration='" + duration.TotalMinutes + "'", connection);
+            updateQuery.ExecuteReader();
+            progressSlider.value = progress * 0.001f;
+            progressText.text = (Mathf.Round(progressSlider.value * 10000f)*0.01f).ToString() + "%";
             yield return new WaitForSeconds(15f);
         }
     }
-    
-
 
     private class DatabaseConfiguration
     {
